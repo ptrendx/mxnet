@@ -38,8 +38,9 @@ namespace mxnet {
 namespace op {
 
 namespace mrcnn_index {
-  enum ROIAlignOpInputs {kRoi, kGtMask, kMatches, kClasses};
-  enum ROIAlignOpOutputs {kMask, kMaskClasses};
+  enum MRCNNMaskTargetOpInputs {kRoi, kGtMask, kMatches, kClasses};
+  enum MRCNNMaskTargetOpOutputs {kMask, kMaskClasses};
+  enum MRCNNMaskTargetOpResource {kTempSpace};
 }  // namespace mrcnn_index
 
 struct MRCNNMaskTargetParam : public dmlc::Parameter<MRCNNMaskTargetParam> {
