@@ -38,7 +38,8 @@ namespace mxnet {
 namespace op {
 
 namespace mrcnn_index {
-  enum MRCNNMaskTargetOpInputs {kRoi, kGtMask, kMatches, kClasses};
+  enum MRCNNMaskTargetOpInputs {kRoi, kDensePolys, kPolysPerInstance,
+                                kPolyRelIdx, kMatches, kClasses};
   enum MRCNNMaskTargetOpOutputs {kMask, kMaskClasses};
   enum MRCNNMaskTargetOpResource {kTempSpace};
 }  // namespace mrcnn_index
@@ -77,10 +78,26 @@ inline bool MRCNNMaskTargetShape(const NodeAttrs& attrs,
   auto batch_size = tshape[0];
   auto num_rois = tshape[1];
 
+/*
   // (B, M, H, W)
   tshape = in_shape->at(mrcnn_index::kGtMask);
   CHECK_EQ(tshape.ndim(), 4) << "gt_masks should be a 4D tensor";
   CHECK_EQ(tshape[0], batch_size) << " batch size should be the same for all the inputs.";
+*/
+
+  // (num of coordinates, 2)
+  tshape = in_shape->at(mrcnn_index::kDensePolys);
+  CHECK_EQ(tshape.ndim(), 4) << "dense_polys should be a 2D tensor";
+
+    // (num of rois/instances)
+  tshape = in_shape->at(mrcnn_index::kPolysPerInstance);
+  CHECK_EQ(tshape.ndim(), 1) << "polys_per_instance should be a 1D tensor";
+  CHECK_EQ(tshape[0], batch_size * num_rois + 1)
+    << " batch size should be the same for all the inputs.";
+
+  // (number of polygons)
+  tshape = in_shape->at(mrcnn_index::kPolyRelIdx);
+  CHECK_EQ(tshape.ndim(), 1) << "poly_rel_idx should be a 1D tensor";
 
   // (B, N)
   tshape = in_shape->at(mrcnn_index::kMatches);
@@ -104,8 +121,8 @@ inline bool MRCNNMaskTargetShape(const NodeAttrs& attrs,
 inline bool MRCNNMaskTargetType(const NodeAttrs& attrs,
                                 std::vector<int>* in_type,
                                 std::vector<int>* out_type) {
-  CHECK_EQ(in_type->size(), 4);
-  int dtype = (*in_type)[1];
+  CHECK_EQ(in_type->size(), 6);
+  int dtype = (*in_type)[0];
   CHECK_NE(dtype, -1) << "Input must have specified type";
 
   out_type->clear();

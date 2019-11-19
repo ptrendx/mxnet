@@ -81,7 +81,7 @@ class ISharedModel {
   template<int dim>
   inline void InitKey(Shape<dim> shape,
                       int key, int devid) {
-    this->InitKey_(shape.FlatTo2D(), key, devid);
+    this->InitKey_(shape.), key, devid);
   }
   /*!
    * \brief wait until the pull event finishes
