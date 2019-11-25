@@ -45,14 +45,11 @@ namespace mrcnn_index {
 }  // namespace mrcnn_index
 
 struct MRCNNMaskTargetParam : public dmlc::Parameter<MRCNNMaskTargetParam> {
-  int num_rois;
   int num_classes;
   int sample_ratio;
   mxnet::TShape mask_size;
 
   DMLC_DECLARE_PARAMETER(MRCNNMaskTargetParam) {
-    DMLC_DECLARE_FIELD(num_rois)
-    .describe("Number of sampled RoIs.");
     DMLC_DECLARE_FIELD(num_classes)
     .describe("Number of classes.");
     DMLC_DECLARE_FIELD(mask_size)
@@ -69,7 +66,8 @@ inline bool MRCNNMaskTargetShape(const NodeAttrs& attrs,
   using namespace mshadow;
   const MRCNNMaskTargetParam& param = nnvm::get<MRCNNMaskTargetParam>(attrs.parsed);
 
-  CHECK_EQ(in_shape->size(), 4) << "Input:[rois, gt_masks, matches, cls_targets]";
+  CHECK_EQ(in_shape->size(), 6)
+    << "Input:[rois, dense_polys, polys_per_instance, poly_rel_idx, matches, cls_targets]";
 
   // (B, N, 4)
   mxnet::TShape tshape = in_shape->at(mrcnn_index::kRoi);
@@ -78,16 +76,9 @@ inline bool MRCNNMaskTargetShape(const NodeAttrs& attrs,
   auto batch_size = tshape[0];
   auto num_rois = tshape[1];
 
-/*
-  // (B, M, H, W)
-  tshape = in_shape->at(mrcnn_index::kGtMask);
-  CHECK_EQ(tshape.ndim(), 4) << "gt_masks should be a 4D tensor";
-  CHECK_EQ(tshape[0], batch_size) << " batch size should be the same for all the inputs.";
-*/
-
   // (num of coordinates, 2)
   tshape = in_shape->at(mrcnn_index::kDensePolys);
-  CHECK_EQ(tshape.ndim(), 4) << "dense_polys should be a 2D tensor";
+  CHECK_EQ(tshape.ndim(), 2) << "dense_polys should be a 2D tensor";
 
     // (num of rois/instances)
   tshape = in_shape->at(mrcnn_index::kPolysPerInstance);
@@ -133,7 +124,8 @@ inline bool MRCNNMaskTargetType(const NodeAttrs& attrs,
 
 template<typename xpu>
 void MRCNNMaskTargetRun(const MRCNNMaskTargetParam& param, const std::vector<TBlob> &inputs,
-                        const std::vector<TBlob> &outputs, mshadow::Stream<xpu> *s);
+                        const std::vector<TBlob> &outputs, const OpContext &ctx,
+                        mshadow::Stream<xpu> *s);
 
 template<typename xpu>
 void MRCNNMaskTargetCompute(const nnvm::NodeAttrs& attrs,
@@ -143,7 +135,7 @@ void MRCNNMaskTargetCompute(const nnvm::NodeAttrs& attrs,
                             const std::vector<TBlob> &outputs) {
   auto s = ctx.get_stream<xpu>();
   const auto& p = dmlc::get<MRCNNMaskTargetParam>(attrs.parsed);
-  MRCNNMaskTargetRun<xpu>(p, inputs, outputs, s);
+  MRCNNMaskTargetRun<xpu>(p, inputs, outputs, ctx, s);
 }
 
 }  // namespace op

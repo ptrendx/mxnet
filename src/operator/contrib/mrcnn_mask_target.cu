@@ -59,8 +59,9 @@ const int CNTS_SIZE = 6144;
 
 
 // Batch size upgrade: Done
+template <typename DType>
 __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *per_roi_poly_idx, const int *poly_rel_idx,
-                                           int poly_count, int roi_count, float4 *roi_data, int mask_size) {
+                                           int poly_count, int roi_count, DType *roi_data, int mask_size) {
     int tid = threadIdx.x;
     int block_jump = blockDim.x;
     int poly_id = blockIdx.x;
@@ -68,12 +69,13 @@ __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *p
     for (roi_idx = 0; roi_idx < roi_count; roi_idx++){
         if (poly_id < per_roi_poly_idx[roi_idx + 1]) break;
     }
-    float w = roi_data[roi_idx].z - roi_data[roi_idx].x;
-  	float h = roi_data[roi_idx].w - roi_data[roi_idx].y;
+    DType *roi = roi_data + (roi_idx * 4);
+    DType w = roi[2] - roi[0];
+    DType h = roi[3] - roi[1];
   	w = fmaxf(w, 1.0f);
   	h = fmaxf(h, 1.0f);
-    float ratio_h = ((float) mask_size) / h;
-    float ratio_w = ((float) mask_size) / w;
+    DType ratio_h = ((DType) mask_size) / h;
+    DType ratio_w = ((DType) mask_size) / w;
 
     int poly_ptr_idx_start = poly_rel_idx[poly_id];
     int poly_ptr_idx_end = poly_rel_idx[poly_id + 1];
@@ -82,8 +84,8 @@ __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *p
     int len = poly_ptr_idx_end - poly_ptr_idx_start;
 
     for (int j = tid; j < len; j += block_jump) {
-        if (j % 2 == 0) poly_data_buf[j] = ratio_w*((float) poly_data_buf[j]- roi_data[roi_idx].x);
-        if (j % 2 == 1) poly_data_buf[j] = ratio_h*((float) poly_data_buf[j]- roi_data[roi_idx].y);
+        if (j % 2 == 0) poly_data_buf[j] = ratio_w*((DType) poly_data_buf[j]- roi[0]);
+        if (j % 2 == 1) poly_data_buf[j] = ratio_h*((DType) poly_data_buf[j]- roi[1]);
     }
 }
 
@@ -123,7 +125,7 @@ __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *po
     __syncthreads();
 
     for(int j = tid; j < k; j += block_jump){
-        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, d, dist;
+        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, dist;
         int flip;
         double s;
         dx = abs(xe - xs);
@@ -156,7 +158,7 @@ __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *po
     }
 
     for (int j = tid; j < k; j += block_jump){
-        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, d, dist;
+        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, d;
         int flip;
         double s;
         dx = __sad(xe, xs, 0);
@@ -355,7 +357,6 @@ __global__ void decode_rle_cuda_kernel(const int *num_of_cnts, uint *cnts, long 
     //find which bin pixel j falls into , which determines the pixel value
     //use binary search
     for(int j = tid; j < h * w; j += block_jump){
-        int bin = 0;
         int min_idx = 0;
         int max_idx = m;
         int mid_idx = m / 2;
@@ -382,8 +383,9 @@ __global__ void decode_rle_cuda_kernel(const int *num_of_cnts, uint *cnts, long 
 
 // Batch size upgrade: Done
 // merging masks happens on mask format, not RLE format.
-__global__ void merge_masks_cuda_kernel(unsigned char *masks_in, float *masks_out, const int mask_size,
-                                        int *per_roi_poly_idx, const float *matches,
+template<typename DType>
+__global__ void merge_masks_cuda_kernel(unsigned char *masks_in, DType *masks_out, const int mask_size,
+                                        int *per_roi_poly_idx, const DType *cls_targets,
                                         int num_classes) {
 
     int roi_idx = blockIdx.x;
@@ -392,7 +394,7 @@ __global__ void merge_masks_cuda_kernel(unsigned char *masks_in, float *masks_ou
     int mask_start_idx = per_roi_poly_idx[roi_idx];
     int num_of_masks_to_merge = per_roi_poly_idx[roi_idx + 1] - per_roi_poly_idx[roi_idx];
 
-    int class_idx = matches[roi_idx];
+    int class_idx = cls_targets[roi_idx];
     int mask_offset = (roi_idx * num_classes + class_idx) * mask_size * mask_size;
 
     for(int j = tid; j < mask_size * mask_size; j += jump_block){
@@ -402,14 +404,8 @@ __global__ void merge_masks_cuda_kernel(unsigned char *masks_in, float *masks_ou
             if (masks_in[(mask_start_idx + k) * mask_size * mask_size + j] == 1) pixel = 1;
             if (pixel == 1) break;
         }
-        masks_out[mask_offset + transposed_pixel] = (float) pixel;
+        masks_out[mask_offset + transposed_pixel] = (DType)pixel;
     }
-}
-
-template <typename xpu, typename DType>
-Tensor<xpu, 1, DType> get_1d_tensor(int size, mshadow::Stream<xpu> *stream, const OpContext &ctx) {
-  return ctx.requested[mrcnn_index::kTempSpace]
-          .get_space_typed<xpu, 1, DType>(Shape1(size), stream);
 }
 
 template <typename T>
@@ -551,7 +547,6 @@ __device__ void RoIAlignForward(
 
 template<typename DType>
 __global__ void MRCNNMaskTargetKernel(const DType *rois,
-                                      const DType *gt_masks,
                                       const DType *matches,
                                       const DType *cls_targets,
                                       DType* sampled_masks,
@@ -560,9 +555,6 @@ __global__ void MRCNNMaskTargetKernel(const DType *rois,
                                       int batch_size,
                                       int num_classes,
                                       int num_rois,
-//                                      int num_gtmasks,
-//                                      int gt_height,
-//                                      int gt_width,
                                       int mask_size_h,
                                       int mask_size_w,
                                       int sample_ratio) {
@@ -590,58 +582,80 @@ __global__ void MRCNNMaskTargetKernel(const DType *rois,
   }
 }
 
+template <typename xpu, typename DType>
+mshadow::Tensor<xpu, 1, DType> get_1d_tensor(int size,
+                                             mshadow::Stream<xpu> *stream,
+                                             const OpContext &ctx) {
+  return ctx.requested[mrcnn_index::kTempSpace]
+          .get_space_typed<xpu, 1, DType>(mshadow::Shape1(size), stream);
+}
 
-void GenerateMaskTargetsFromPolygons(double* dense_polys,
-                                     const Tensor<gpu, 1, int>& per_roi_poly_idx,
-                                     const Tensor<gpu, 1, int>& poly_rel_idx,
-                                     const Tensor<gpu, 3, float>& rois,
-                                     mshadow::Stream<gpu> *s,
-                                     const int mask_size,
-                                     const int batch_size) {
+template<>
+void MRCNNMaskTargetRun<gpu>(const MRCNNMaskTargetParam& param, const std::vector<TBlob> &inputs,
+                             const std::vector<TBlob> &outputs, const OpContext &ctx,
+                             mshadow::Stream<gpu> *s) {
+  const int block_dim_size = kMaxThreadsPerBlock;
+  using namespace mxnet_op;
+  using mshadow::Tensor;
 
-    // only works with square mask targets
-    const int M = mask_size;
-    assert (M < 32);
-    //if M >= 32, shared memory buffer size may not be
-    //sufficient. Need to fix this by blocking
+  // only works with square mask targets
+  const int M = param.mask_size[0];
+  assert (M < 32);
+  //if M >= 32, shared memory buffer size may not be
+  //sufficient. Need to fix this by blocking
 
-    int num_of_rois = rois.shape_[1];
-    int num_of_poly = poly_rel_idx.shape_[0] - 1;
+  // Fixed type inputs
+  const auto polys_per_instance = inputs[mrcnn_index::kPolysPerInstance].FlatTo1D<gpu, int>(s);
+  const auto poly_rel_idx = inputs[mrcnn_index::kPolyRelIdx].FlatTo1D<gpu, int>(s);
+  auto dense_polys = inputs[mrcnn_index::kDensePolys].FlatTo2D<gpu, double>(s);
 
-    // maybe:
-    Tensor<gpu, 1, int> d_x_t = get_1d_tensor<gpu, int>(BUFFER_SIZE * num_of_poly, stream, ctx);
-    Tensor<gpu, 1, int> d_y_t = get_1d_tensor<gpu, int>(BUFFER_SIZE * num_of_poly, stream, ctx);
-    Tensor<gpu, 1, int> d_u_t = get_1d_tensor<gpu, int>(BUFFER_SIZE * num_of_poly, stream, ctx);
-    Tensor<gpu, 1, int> d_v_t = get_1d_tensor<gpu, int>(BUFFER_SIZE * num_of_poly, stream, ctx);
-    Tensor<gpu, 1, uint> d_a_t = get_1d_tensor<gpu, uint>(BUFFER_SIZE * num_of_poly, stream, ctx); //used with uint* pointer
-    Tensor<gpu, 1, uint> d_b_t = get_1d_tensor<gpu, uint>(BUFFER_SIZE * num_of_poly, stream, ctx);  //used with uint* pointer
+  int num_of_poly = poly_rel_idx.shape_[0] - 1;
 
-    Tensor<gpu, 1, char> d_mask_t = get_1d_tensor<gpu, char>(M * M * num_of_poly, stream, ctx);
-    Tensor<gpu, 1, int> d_num_of_counts_t = get_1d_tensor<gpu, int>(num_of_poly, stream, ctx);
-    Tensor<gpu, 1, int> d_cnts_t = get_1d_tensor<gpu, int>(CNTS_SIZE * num_of_poly, stream, ctx);
+  // Buffers
+  Tensor<gpu, 1, int> d_xyuv_t = get_1d_tensor<gpu, int>(4 * BUFFER_SIZE * num_of_poly, s, ctx);
+  Tensor<gpu, 1, uint> d_a_t = get_1d_tensor<gpu, uint>(BUFFER_SIZE * num_of_poly, s, ctx);
+  Tensor<gpu, 1, uint> d_b_t = get_1d_tensor<gpu, uint>(BUFFER_SIZE * num_of_poly, s, ctx);
+  Tensor<gpu, 1, unsigned char> d_mask_t = get_1d_tensor<gpu, unsigned char>(M * M * num_of_poly, s, ctx);
+  Tensor<gpu, 1, int> d_num_of_counts_t = get_1d_tensor<gpu, int>(num_of_poly, s, ctx);
+  Tensor<gpu, 1, uint> d_cnts_t = get_1d_tensor<gpu, uint>(CNTS_SIZE * num_of_poly, s, ctx);
 
-    // Output
+
+  MSHADOW_REAL_TYPE_SWITCH(inputs[mrcnn_index::kRoi].type_flag_, DType, {
+    const auto rois = inputs[mrcnn_index::kRoi].FlatToKD<gpu, 3, DType>(s);
+    const auto matches = inputs[mrcnn_index::kMatches].FlatTo2D<gpu, DType>(s);
+    const auto cls_targets = inputs[mrcnn_index::kClasses].FlatTo2D<gpu, DType>(s);
+    // dense_polys need to be non-const
+
     auto out_masks = outputs[mrcnn_index::kMask].FlatToKD<gpu, 5, DType>(s);
+    auto out_mask_cls = outputs[mrcnn_index::kMaskClasses].FlatToKD<gpu, 5, DType>(s);
 
-    crop_and_scale_cuda_kernel<<<num_of_poly, 256, 0, stream.stream()>>>(dense_polys,
-                                                                         per_roi_poly_idx.dptr_,
-                                                                         poly_rel_idx.dptr_,
-                                                                         poly_count,
-                                                                         num_of_rois * batch_size,
-                                                                         (float4*) rois.dptr_,
-                                                                         M,
-                                                                         B);
+    int batch_size = rois.shape_[0];
+
+    int num_el = outputs[mrcnn_index::kMask].Size();
+
+    // Mask Target generation
+    int num_of_rois = rois.shape_[1];
+
+    auto stream = mshadow::Stream<gpu>::GetStream(s);
+
+    crop_and_scale_cuda_kernel<<<num_of_poly, 256, 0, stream>>>(dense_polys.dptr_,
+                                                                polys_per_instance.dptr_,
+                                                                poly_rel_idx.dptr_,
+                                                                num_of_poly,
+                                                                num_of_rois * batch_size,
+                                                                rois.dptr_,
+                                                                M);
 
     // TODO: larger threads-per-block might be better here, because each CTA uses 32 KB of shmem,
     // and occupancy is likely shmem capacity bound
-    rle_fr_poly_cuda_kernel<<<num_of_poly, 1024, 0, stream>>>(dense_polys,
+    rle_fr_poly_cuda_kernel<<<num_of_poly, 1024, 0, stream>>>(dense_polys.dptr_,
                                                               poly_rel_idx.dptr_,
                                                               M, M,
                                                               d_cnts_t.dptr_,
-                                                              d_x_t.dptr_,
-                                                              d_y_t.dptr_,
-                                                              d_u_t.dptr_,
-                                                              d_v_t.dptr_,
+                                                              d_xyuv_t.dptr_,
+                                                              d_xyuv_t.dptr_ + BUFFER_SIZE * num_of_poly,
+                                                              d_xyuv_t.dptr_ + 2 * BUFFER_SIZE * num_of_poly,
+                                                              d_xyuv_t.dptr_ + 3 * BUFFER_SIZE * num_of_poly,
                                                               d_a_t.dptr_,
                                                               d_b_t.dptr_,
                                                               d_num_of_counts_t.dptr_);
@@ -649,55 +663,22 @@ void GenerateMaskTargetsFromPolygons(double* dense_polys,
     decode_rle_cuda_kernel<<<num_of_poly, 256, 0, stream>>>(d_num_of_counts_t.dptr_,
                                                             d_cnts_t.dptr_,
                                                             M, M,
-                                                            d_mask_t.ptr_);
+                                                            d_mask_t.dptr_);
 
     // out: 2 * (B, N, C, MS, MS)
-    merge_masks_cuda_kernel<<<B * num_of_rois, 256, 0, stream)>>>(d_mask_t.dptr_,
-                                                                  out_masks.dptr_,
-                                                                  M, per_roi_poly_idx.dptr_,
-                                                                  matches,
-                                                                  num_classes);
-}
-
-
-template<>
-void MRCNNMaskTargetRun<gpu>(const MRCNNMaskTargetParam& param, const std::vector<TBlob> &inputs,
-                             const std::vector<TBlob> &outputs, mshadow::Stream<gpu> *s) {
-  const int block_dim_size = kMaxThreadsPerBlock;
-  using namespace mxnet_op;
-  using mshadow::Tensor;
-
-  auto stream = mshadow::Stream<gpu>::GetStream(s);
-
-  MSHADOW_REAL_TYPE_SWITCH(inputs[0].type_flag_, DType, {
-    auto rois = inputs[mrcnn_index::kRoi].FlatToKD<gpu, 3, DType>(s);
-    const auto polys_per_instance = inputs[mrcnn_index::kPolysPerInstance].FlatTo1D<gpu, int>(s);
-    const auto poly_rel_idx = inputs[mrcnn_index::kPolyRelIdx].FlatTo1D<gpu, int>(s);
-    const auto matches = inputs[mrcnn_index::kMatches].FlatTo2D<gpu, DType>(s);
-    const auto cls_targets = inputs[mrcnn_index::kClasses].FlatTo2D<gpu, DType>(s);
-    // dense_polys need to be non-const
-    auto dense_polys = inputs[mrcnn_index::kDensePolys].FlatTo2D<gpu, double>(s);
-
-    auto out_masks = outputs[mrcnn_index::kMask].FlatToKD<gpu, 5, DType>(s);
-    auto out_mask_cls = outputs[mrcnn_index::kMaskClasses].FlatToKD<gpu, 5, DType>(s);
-
-    int batch_size = rois.shape_[0];
-    // int num_gtmasks = gt_masks.shape_[1];
-    // int gt_height = gt_masks.shape_[2];
-    // int gt_width = gt_masks.shape_[3];
-
-    int num_el = outputs[mrcnn_index::kMask].Size();
-
-
-    GenerateMaskTargetsFromPolygons(dense_polys.ptr_, ;rois
+    merge_masks_cuda_kernel<<<batch_size * num_of_rois, 256, 0, stream>>>(d_mask_t.dptr_,
+                                                                         out_masks.dptr_,
+                                                                         M, polys_per_instance.dptr_,
+                                                                         cls_targets.dptr_,
+                                                                         param.num_classes);
 
     dim3 dimGrid = dim3(CUDA_GET_BLOCKS(num_el));
     dim3 dimBlock = dim3(block_dim_size);
 
     MRCNNMaskTargetKernel<<<dimGrid, dimBlock, 0, stream>>>
-    (rois.dptr_, gt_masks.dptr_, matches.dptr_, cls_targets.dptr_,
+    (rois.dptr_, matches.dptr_, cls_targets.dptr_,
     out_masks.dptr_, out_mask_cls.dptr_,
-    num_el, batch_size, param.num_classes, param.num_rois,
+    num_el, batch_size, param.num_classes, num_of_rois,
     param.mask_size[0], param.mask_size[1], param.sample_ratio);
     MSHADOW_CUDA_POST_KERNEL_CHECK(MRCNNMaskTargetKernel);
   });
@@ -707,20 +688,23 @@ DMLC_REGISTER_PARAMETER(MRCNNMaskTargetParam);
 
 NNVM_REGISTER_OP(_contrib_mrcnn_mask_target)
 .describe("Generate mask targets for Mask-RCNN.")
-.set_num_inputs(4)
+.set_num_inputs(6)
 .set_num_outputs(2)
 .set_attr_parser(ParamParser<MRCNNMaskTargetParam>)
 .set_attr<mxnet::FInferShape>("FInferShape", MRCNNMaskTargetShape)
 .set_attr<nnvm::FInferType>("FInferType", MRCNNMaskTargetType)
 .set_attr<FCompute>("FCompute<gpu>", MRCNNMaskTargetCompute<gpu>)
+.set_attr<FResourceRequest>("FResourceRequest",
+  [](const NodeAttrs& attrs) {
+    return std::vector<ResourceRequest>{ResourceRequest::kTempSpace};
+  })
 .add_argument("rois", "NDArray-or-Symbol", "Bounding box coordinates, a 3D array")
-// .add_argument("gt_masks", "NDArray-or-Symbol", "Input masks of full image size, a 4D array")
-.add_argument("dense_polys", "NDArray-or-Symbol", "Dense coordinates representing all the
-polygons, a 2D array.")
-.add_argument("polys_per_instance", "NDArray-or-Symbol", "The number of polygons per instance
-(last value is the total number of polygons), a 1D array of size B * num_rois + 1.")
-.add_argument("poly_rel_idx", "NDArray-or-Symbol", "The per-polygon offset in `dense_polys`,
-a 1D array of size size num_of_polys + 1.")
+.add_argument("dense_polys", "NDArray-or-Symbol", "Dense coordinates representing all the"
+"polygons, a 2D array.")
+.add_argument("polys_per_instance", "NDArray-or-Symbol", "The number of polygons per instance"
+"(last value is the total number of   polygons), a 1D array of size B * num_rois + 1.")
+.add_argument("poly_rel_idx", "NDArray-or-Symbol", "The per-polygon offset in `dense_polys`,"
+"a 1D array of size size num_of_polys + 1.")
 .add_argument("matches", "NDArray-or-Symbol", "Index to a gt_mask, a 2D array")
 .add_argument("cls_targets", "NDArray-or-Symbol",
               "Value [0, num_class), excluding background class, a 2D array")
