@@ -92,6 +92,15 @@ __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *p
 // Batch size upgrade: No need, per polygon
 /*cuda version of rleFrPoly function in this API:
 https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
+#define SHBUFF_SIZE 4200000
+__global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
+  uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
+  uint *b_in, int *num_of_cnts, int* shbuf1, int* shbuf2) {
+    
+
+// Batch size upgrade: No need, per polygon
+/*cuda version of rleFrPoly function in this API:
+https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
 
 __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
                                         uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
@@ -408,6 +417,37 @@ __global__ void merge_masks_cuda_kernel(unsigned char *masks_in, DType *masks_ou
     }
 }
 
+// Batch size upgrade: Done
+// merging masks happens on mask format, not RLE format.
+template<typename DType>
+__global__ void merge_masks_cuda_kernel(unsigned char *masks_in, DType *masks_out, const int mask_size,
+                                        int *per_roi_poly_idx, const DType *cls_targets,
+                                        int num_classes) {
+
+    int roi_idx = blockIdx.x / num_classes;
+    int class_idx = blockIdx.x % num_classes;
+    int tid = threadIdx.x;
+    int jump_block = blockDim.x;
+    int mask_start_idx = per_roi_poly_idx[roi_idx];
+    int num_of_masks_to_merge = per_roi_poly_idx[roi_idx + 1] - per_roi_poly_idx[roi_idx];
+
+    int mask_offset = (roi_idx * num_classes + class_idx) * mask_size * mask_size;
+
+    for(int j = tid; j < mask_size * mask_size; j += jump_block){
+        int transposed_pixel = (j % mask_size) * mask_size + j / mask_size;
+        unsigned char pixel = 0;
+        if (class_idx == cls_targets[roi_idx]) {
+            for(int k = 0; k < num_of_masks_to_merge; k++){
+                if (masks_in[(mask_start_idx + k) * mask_size * mask_size + j] == 1)
+                  pixel = 1;
+                if (pixel == 1) break;
+            }
+        }
+        masks_out[mask_offset + transposed_pixel] = (DType)pixel;
+    }
+}
+
+
 template <typename T>
 __device__ T bilinear_interpolate(
     const T* in_data,
@@ -666,11 +706,12 @@ void MRCNNMaskTargetRun<gpu>(const MRCNNMaskTargetParam& param, const std::vecto
                                                             d_mask_t.dptr_);
 
     // out: 2 * (B, N, C, MS, MS)
-    merge_masks_cuda_kernel<<<batch_size * num_of_rois, 256, 0, stream>>>(d_mask_t.dptr_,
-                                                                         out_masks.dptr_,
-                                                                         M, polys_per_instance.dptr_,
-                                                                         cls_targets.dptr_,
-                                                                         param.num_classes);
+    int total_num_of_masks = batch_size * num_of_rois * param.num_classes;
+    merge_masks_cuda_kernel<<<total_num_of_masks, 256, 0, stream>>>(d_mask_t.dptr_,
+                                                                    out_masks.dptr_,
+                                                                    M, polys_per_instance.dptr_,
+                                                                    cls_targets.dptr_,
+                                                                    param.num_classes);
 
     dim3 dimGrid = dim3(CUDA_GET_BLOCKS(num_el));
     dim3 dimBlock = dim3(block_dim_size);
