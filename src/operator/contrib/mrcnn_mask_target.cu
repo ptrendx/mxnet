@@ -25,6 +25,7 @@
  */
 
 #include "./mrcnn_mask_target-inl.h"
+#include <cub/cub.cuh>
 
 namespace mxnet {
 namespace op {
@@ -95,6 +96,7 @@ __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *p
 /*cuda version of rleFrPoly function in this API:
 https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
 
+#if 0
 __global__ void old_rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
                                         uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
                                         uint *b_in, int *num_of_cnts) {
@@ -314,6 +316,7 @@ __global__ void old_rle_fr_poly_cuda_kernel(const double *dense_coordinates, int
     }
     __syncthreads();
 }
+#endif
 
 
 
@@ -820,6 +823,161 @@ mshadow::Tensor<xpu, 1, DType> get_1d_tensor(int size,
           .get_space_typed<xpu, 1, DType>(mshadow::Shape1(size), stream);
 }
 
+constexpr int NTHREADS = 256;
+constexpr int NEDGES = NTHREADS;
+constexpr int THREADS_PER_WARP = 32;
+
+__device__ inline int binary_search(double x, double* table, const int N) {
+  int min_idx = 0;
+  int max_idx = N;
+  int mid_idx = N / 2;
+  /*if (blockIdx.x == 0 && threadIdx.x == 32) {*/
+    /*printf("HAHA %f\n", x);*/
+  /*}*/
+  while(max_idx > min_idx){
+      if(x > table[mid_idx]) {
+          min_idx = mid_idx+1;
+  /*if (blockIdx.x == 0 && threadIdx.x == 32) {*/
+    /*printf("HOHO %d %d %d\n", min_idx, mid_idx, max_idx);*/
+  /*}*/
+      }
+      else if (x < table[mid_idx]) {
+          max_idx = mid_idx;
+  /*if (blockIdx.x == 0 && threadIdx.x == 32) {*/
+    /*printf("HIHI %d %d %d\n", min_idx, mid_idx, max_idx);*/
+  /*}*/
+      }
+      else {
+          mid_idx++;
+          break;
+      }
+      mid_idx = (min_idx + max_idx) / 2;
+  }
+  /*if (blockIdx.x == 0 && threadIdx.x == 32) {*/
+    /*printf("HLEHLE %d %d %d\n", min_idx, mid_idx, max_idx);*/
+  /*}*/
+  return mid_idx;
+}
+
+__global__ void rasterize_kernel(const double* dense_coordinates,
+                                 const int* poly_rel_idx,
+                                 const long h,
+                                 const long w,
+                                 unsigned char* mask) {
+  const int poly_id = blockIdx.x;
+  const int tid = threadIdx.x;
+  long k = (poly_rel_idx[poly_id + 1] - poly_rel_idx[poly_id]) / 2;
+  __shared__ double2 vertices[NEDGES];
+  typedef cub::BlockRadixSort<double, NTHREADS, 1> cub_sort;
+  constexpr int NWARPS = NTHREADS / THREADS_PER_WARP;
+  __shared__ union {
+    double intersections[NEDGES * NWARPS];
+    typename cub_sort::TempStorage temp_storage;
+  } scratch;
+
+  double temp_intersections[NWARPS];
+
+  assert(k < NEDGES);
+
+  /*if (threadIdx.x == 0) {*/
+    /*printf("%d k: %d %d %d\n", blockIdx.x, (int)k, poly_rel_idx[poly_id], poly_rel_idx[poly_id + 1]);*/
+  /*}*/
+
+  const double2 *xy = reinterpret_cast<const double2*>(dense_coordinates + poly_rel_idx[poly_id]);
+
+  unsigned char* const mask_ptr = mask + poly_id * h * w;
+
+  for (int i = tid; i < k; i += blockDim.x) {
+    vertices[i] = xy[i];
+  }
+  __syncthreads();
+
+  /*if (blockIdx.x == 0 && threadIdx.x == 0) {*/
+    /*printf("[\n");*/
+    /*for (int i = 0; i < k; ++i) {*/
+      /*printf("[%f, %f],\n", vertices[i].x, vertices[i].y);*/
+    /*}*/
+    /*printf("]\n");*/
+  /*}*/
+
+  const int warp_id = tid / THREADS_PER_WARP;
+  const int lane_id = tid % THREADS_PER_WARP;
+  const double invalid_intersection = 2 * w;
+  const long aligned_h = ((h + NWARPS - 1) / NWARPS) * NWARPS;
+  for (int current_y = warp_id;
+       current_y < aligned_h;
+       current_y += NWARPS) {
+    double my_y = current_y + 0.5;
+    for (int edge = lane_id; edge < NEDGES; edge += THREADS_PER_WARP) {
+      scratch.intersections[warp_id * NEDGES + edge] = invalid_intersection;
+    }
+    __syncthreads();
+    if (current_y < h) {
+      for (int edge = lane_id; edge < k; edge += THREADS_PER_WARP) {
+        const int previous_edge = (edge - 1 + k) % k;
+        const double2 vert1 = vertices[previous_edge];
+        const double2 vert2 = vertices[edge];
+        if (vert1.y != vert2.y) {
+          double my_intersection = (my_y * (vert1.x - vert2.x) +
+                                    vert2.x * vert1.y -
+                                    vert1.x * vert2.y) /
+                                   (vert1.y - vert2.y);
+          if (my_intersection <= fmax(vert1.x, vert2.x) &&
+              my_intersection >= fmin(vert1.x, vert2.x)) {
+            scratch.intersections[warp_id * NEDGES + edge] = my_intersection;
+          }
+        }
+      }
+    }
+
+    __syncthreads();
+
+#pragma unroll
+    for (int i = 0; i < NWARPS; ++i) {
+      temp_intersections[i] = scratch.intersections[i * NEDGES + tid];
+    }
+
+    __syncthreads();
+
+#pragma unroll
+    for (int i = 0; i < NWARPS; ++i) {
+      double temp[1] = { temp_intersections[i] };
+      cub_sort(scratch.temp_storage).Sort(temp);
+      temp_intersections[i] = temp[0];
+    }
+
+    __syncthreads();
+
+#pragma unroll
+    for (int i = 0; i < NWARPS; ++i) {
+      scratch.intersections[i * NEDGES + tid] = temp_intersections[i];
+    }
+
+    __syncthreads();
+    /*if (current_y == 1 && lane_id == 0 && blockIdx.x == 0) {*/
+      /*printf("Intersections:\n");*/
+      /*for (int i = 0; i < k; ++i) {*/
+        /*printf("%d: %f\n", i, scratch.intersections[i]);*/
+      /*}*/
+      /*printf("End intersections\n");*/
+    /*}*/
+
+    if (current_y < h) {
+      for (int x = lane_id; x < w; x += THREADS_PER_WARP) {
+        const double my_x = x + 0.5;
+        const int place = binary_search(my_x, scratch.intersections + NEDGES * warp_id, NEDGES);
+        /*if (blockIdx.x == 0 && current_y == 1) {*/
+          /*printf("%d: %f My binary search result is %d and I write %d to %d\n", x, my_x, place, place % 2, (int)(x + current_y * w));*/
+        /*}*/
+        mask_ptr[x + current_y * w] = place % 2;
+      }
+    }
+
+    __syncthreads();
+  }
+}
+
+
 template<>
 void MRCNNMaskTargetRun<gpu>(const MRCNNMaskTargetParam& param, const std::vector<TBlob> &inputs,
                              const std::vector<TBlob> &outputs, const OpContext &ctx,
@@ -876,24 +1034,54 @@ void MRCNNMaskTargetRun<gpu>(const MRCNNMaskTargetParam& param, const std::vecto
                                                                 rois.dptr_,
                                                                 M);
 
+    std::cout << M << std::endl;
+    std::cout << num_of_poly << std::endl;
+    std::cout << num_of_rois << std::endl;
+    std::cout << batch_size << std::endl;
+    std::cout << dense_polys.shape_ << std::endl;
+    cudaDeviceSynchronize();
+
+    rasterize_kernel<<<num_of_poly, 256, 0, stream>>>(dense_polys.dptr_,
+                                                      poly_rel_idx.dptr_,
+                                                      M, M,
+                                                      d_mask_t.dptr_);
+    cudaDeviceSynchronize();
+    std::cout << cudaGetErrorString(cudaGetLastError()) << std::endl;
+    unsigned char* test = new unsigned char[28*28];
+    cudaMemcpy(test, d_mask_t.dptr_, 28*28*sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    std::cout << cudaGetErrorString(cudaGetLastError()) << std::endl;
+    for (int i = 0; i < 28; ++i) {
+      for (int j = 0; j < 28; ++j) {
+        if (test[i*28 + j] == 0) {
+          std::cout << " ";
+        } else {
+          std::cout << "#";
+        }
+      }
+      std::cout << std::endl;
+    }
+    std::cout << std::endl;
+
+
+
     // TODO: larger threads-per-block might be better here, because each CTA uses 32 KB of shmem,
     // and occupancy is likely shmem capacity bound
-    rle_fr_poly_cuda_kernel<<<num_of_poly, 1024, 0, stream>>>(dense_polys.dptr_,
-                                                              poly_rel_idx.dptr_,
-                                                              M, M,
-                                                              d_cnts_t.dptr_,
-                                                              d_xyuv_t.dptr_,
-                                                              d_xyuv_t.dptr_ + BUFFER_SIZE * num_of_poly,
-                                                              d_xyuv_t.dptr_ + 2 * BUFFER_SIZE * num_of_poly,
-                                                              d_xyuv_t.dptr_ + 3 * BUFFER_SIZE * num_of_poly,
-                                                              d_a_t.dptr_,
-                                                              d_b_t.dptr_,
-                                                              d_num_of_counts_t.dptr_);
+    /*rle_fr_poly_cuda_kernel<<<num_of_poly, 1024, 0, stream>>>(dense_polys.dptr_,*/
+                                                              /*poly_rel_idx.dptr_,*/
+                                                              /*M, M,*/
+                                                              /*d_cnts_t.dptr_,*/
+                                                              /*d_xyuv_t.dptr_,*/
+                                                              /*d_xyuv_t.dptr_ + BUFFER_SIZE * num_of_poly,*/
+                                                              /*d_xyuv_t.dptr_ + 2 * BUFFER_SIZE * num_of_poly,*/
+                                                              /*d_xyuv_t.dptr_ + 3 * BUFFER_SIZE * num_of_poly,*/
+                                                              /*d_a_t.dptr_,*/
+                                                              /*d_b_t.dptr_,*/
+                                                              /*d_num_of_counts_t.dptr_);*/
 
-    decode_rle_cuda_kernel<<<num_of_poly, 256, 0, stream>>>(d_num_of_counts_t.dptr_,
-                                                            d_cnts_t.dptr_,
-                                                            M, M,
-                                                            d_mask_t.dptr_);
+    /*decode_rle_cuda_kernel<<<num_of_poly, 256, 0, stream>>>(d_num_of_counts_t.dptr_,*/
+                                                            /*d_cnts_t.dptr_,*/
+                                                            /*M, M,*/
+                                                            /*d_mask_t.dptr_);*/
 
     // out: 2 * (B, N, C, MS, MS)
     int total_num_of_masks = batch_size * num_of_rois * param.num_classes;
