@@ -54,7 +54,8 @@ typedef unsigned int uint;
 // 6144 is based on minimum shared memory size per SM
 // across all pytorch-supported GPUs. Need to use blocking
 // to avoid this restriction
-const int BUFFER_SIZE = 6144;
+const int SH_BUFFER_SIZE = 6144;
+const int BUFFER_SIZE = 30144;
 const int CNTS_SIZE = 6144;
 
 
@@ -89,20 +90,12 @@ __global__ void crop_and_scale_cuda_kernel(double *dense_poly_data, const int *p
     }
 }
 
-// Batch size upgrade: No need, per polygon
-/*cuda version of rleFrPoly function in this API:
-https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
-#define SHBUFF_SIZE 4200000
-__global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
-  uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
-  uint *b_in, int *num_of_cnts, int* shbuf1, int* shbuf2) {
-    
 
 // Batch size upgrade: No need, per polygon
 /*cuda version of rleFrPoly function in this API:
 https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
 
-__global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
+__global__ void old_rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
                                         uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
                                         uint *b_in, int *num_of_cnts) {
     int poly_id = blockIdx.x;
@@ -201,6 +194,7 @@ __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *po
         shbuf1[tid] = 0;
         shbuf2[tid] = 0;
     }
+    
     /* get points along y-boundary and downsample */
     for (int j = tid; j < k2; j += block_jump) {
         if (j > 0) {
@@ -309,6 +303,7 @@ __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *po
         shbuf1[j] -= shbuf2[j];
     }
     __syncthreads();
+    // writing to output
     uint *cnts_buf = cnts + cnts_offset;
     if (tid == 0){
         j = m = 0;
@@ -319,6 +314,315 @@ __global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *po
     }
     __syncthreads();
 }
+
+
+
+// Batch size upgrade: No need, per polygon
+/*cuda version of rleFrPoly function in this API:
+https://github.com/cocodataset/cocoapi/blob/master/common/maskApi.c*/
+
+__global__ void rle_fr_poly_cuda_kernel(const double *dense_coordinates, int *poly_rel_idx, long h, long w,
+                                        uint *cnts, int *x_in, int *y_in, int *u_in, int *v_in, uint *a_in,
+                                        uint *b_in, int *num_of_cnts) {
+    int poly_id = blockIdx.x;
+    int tid = threadIdx.x;
+    int block_jump = blockDim.x;
+    long cnts_offset = poly_id * CNTS_SIZE;
+    long k = (poly_rel_idx[poly_id + 1] - poly_rel_idx[poly_id]) / 2;
+
+    const double *xy = dense_coordinates + poly_rel_idx[poly_id];
+    int *x = x_in + poly_id * BUFFER_SIZE;
+    int *y = y_in + poly_id * BUFFER_SIZE;
+    int *u = u_in + poly_id * BUFFER_SIZE;
+    int *v = v_in + poly_id * BUFFER_SIZE;
+    uint *a = a_in + poly_id * BUFFER_SIZE;
+    uint *b = b_in + poly_id * BUFFER_SIZE;
+    /* upsample and get discrete points densely along entire boundary */
+    long j, m = 0;
+    double scale = 5;
+    __shared__ int shbuf1[SH_BUFFER_SIZE];
+    __shared__ int shbuf2[SH_BUFFER_SIZE];
+    for(long j = tid; j < SH_BUFFER_SIZE; j += block_jump) {
+        shbuf1[j] = 0;
+        shbuf2[j] = 0;
+    }
+    for(long j = tid; j <= k; j += block_jump)
+        x[j] = j < k ? ((int) (scale * xy[2 * j + 0] + 0.5)) : ((int) (scale * xy[0] + 0.5));
+    for(long j = tid; j <= k; j += block_jump)
+        y[j] = j < k ? ((int) (scale * xy[2 * j + 1] + 0.5)) : ((int) (scale * xy[1] + 0.5));
+    __syncthreads();
+
+    for(int j = tid; j < k; j += block_jump){
+        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, dist;
+        int flip;
+        double s;
+        dx = abs(xe - xs);
+        dy = abs(ys - ye);
+        flip = (dx >= dy && xs > xe) || (dx < dy && ys > ye);
+        if (flip) {t = xs; xs = xe; xe = t; t = ys; ys = ye; ye = t;}
+        s = dx >= dy ? (double) (ye - ys) / dx : (double) (xe - xs) / dy;
+        dist = dx >= dy ? dx + 1 : dy + 1;
+        shbuf1[j + 1] = dist;
+        shbuf2[j + 1] = dist;
+    }
+    __syncthreads();
+    //block-wide exclusive prefix scan
+    int switch_buf = 0;
+    for (int offset = 1; offset <= k; offset *= 2){
+        switch_buf = 1 - switch_buf;
+        if (switch_buf == 0){
+            for(int j = tid; j <= k; j += block_jump){
+                if (j >= offset) shbuf2[j] = shbuf1[j] + shbuf1[j - offset];
+                else shbuf2[j] = shbuf1[j];
+            }
+        }
+        else if (switch_buf == 1){
+            for(int j = tid; j <= k; j += block_jump){
+                if (j >= offset) shbuf1[j] = shbuf2[j] + shbuf2[j - offset];
+                else shbuf1[j] = shbuf2[j];
+            }
+        }
+        __syncthreads();
+    }
+
+    for (int j = tid; j < k; j += block_jump){
+        int xs = x[j], xe = x[j + 1], ys = y[j], ye = y[j + 1], dx, dy, t, d;
+        int flip;
+        double s;
+        dx = __sad(xe, xs, 0);
+        dy = __sad(ys, ye, 0);
+        flip = (dx >= dy && xs > xe) || (dx < dy && ys > ye);
+        if (flip) {t = xs; xs = xe; xe = t; t = ys; ys = ye; ye = t;}
+        s = dx >= dy ? (double) (ye - ys) / dx : (double) (xe - xs) / dy;
+        m = switch_buf == 0 ? shbuf2[j] : shbuf1[j];
+        if (dx >= dy) for (d = 0; d <= dx; d++) {
+          /*the multiplication statement 's*t' causes nvcc to optimize with flush-to-zero=True for
+          double precision multiply, which we observe produces different results than CPU occasionally.
+          To force flush-to-zero=False, we use __dmul_rn intrinsics function */
+          t = flip ? dx - d : d;
+          u[m] = t + xs;
+          v[m] = (int) (ys + __dmul_rn(s, t) + .5);
+          m++;
+        }
+        else for (d = 0; d <= dy; d++) {
+          t = flip ? dy - d : d;
+          v[m] = t + ys;
+          u[m] = (int) (xs + __dmul_rn(s, t) + .5);
+          m++;
+        }
+    }
+    __syncthreads();
+    m = switch_buf == 0 ? shbuf2[k] : shbuf1[k];
+    int k2 = m;
+    __syncthreads();
+    double xd, yd;
+    if (tid == 0) {
+        shbuf1[tid] = 0;
+        shbuf2[tid] = 0;
+    }
+    
+
+    /*************************************************
+    *** get points along y-boundary and downsample ***
+    *************************************************/
+
+    // We need to use blocking as k2 might be > shmem size
+    int previous_block_sum = 0;
+    int current_tid = tid;
+    int current_k2 = 0;
+    for (int current_k2_offset = 0; current_k2_offset < k2; current_k2_offset += SH_BUFFER_SIZE) {
+      
+      current_k2 = (k2 - current_k2_offset) > SH_BUFFER_SIZE ? SH_BUFFER_SIZE : k2;
+
+      for (int j = current_tid; j < current_k2_offset + current_k2; j += block_jump) {
+          if (j > 0) {
+              int shbuf_j = j - current_k2_offset;
+              if (u[j] != u[j - 1]){
+                  xd = (double) (u[j] < u[j-1] ? u[j] : u[j] - 1);
+                  xd = (xd + .5) / scale - .5;
+                  if (floor(xd) != xd || xd < 0 || xd > w - 1 ) {
+                      shbuf1[shbuf_j] = 0;
+                      shbuf2[shbuf_j] = 0;
+                      continue;
+                  }
+                  yd = (double) (v[j] < v[j - 1] ? v[j] : v[j - 1]); yd = (yd + .5) / scale - .5;
+                  if (yd < 0) yd = 0;
+                  else if (yd > h) yd = h; yd = ceil(yd);
+                  shbuf1[shbuf_j] = 1;
+                  shbuf2[shbuf_j] = 1;
+              } else {
+                  shbuf1[shbuf_j] = 0;
+                  shbuf2[shbuf_j] = 0;
+              }
+          }
+      }
+      __syncthreads();
+      //exclusive prefix scan
+      if (tid == 0) {
+        shbuf1[0] += previous_block_sum;
+        shbuf2[0] += previous_block_sum;
+      }
+      __syncthreads();
+      switch_buf = 0;
+      for (int offset = 1; offset < current_k2; offset *= 2) {
+          switch_buf = 1 - switch_buf;
+          if (switch_buf == 0){
+              for (int j = tid; j < current_k2; j += block_jump){
+                  if (j >= offset) shbuf2[j] = shbuf1[j - offset] + shbuf1[j];
+                  else shbuf2[j] = shbuf1[j];
+              }
+          }
+          else if (switch_buf == 1){
+              for (int j = tid; j < current_k2; j += block_jump){
+                  if (j >= offset) shbuf1[j] = shbuf2[j - offset] + shbuf2[j];
+                  else shbuf1[j] = shbuf2[j];
+              }
+          }
+          __syncthreads();
+      }
+
+      if (tid == 0) {
+        previous_block_sum = switch_buf == 0 ? shbuf2[current_k2 - 1] : shbuf1[current_k2 - 1];
+      }
+      __syncthreads();
+
+      int j = 0;
+      for (j = current_tid; j < current_k2_offset + current_k2; j += block_jump){
+        int shbuf_j = j - current_k2_offset;
+        if (j > 0){
+            if(u[j] != u[j - 1]){
+                xd = (double) (u[j] < u[j - 1] ? u[j] : u[j] - 1);
+                xd = (xd + .5) / scale - .5;
+                if (floor(xd) != xd || xd < 0 || xd > w - 1) {continue;}
+                yd = (double) (v[j] < v[j - 1] ? v[j] : v[j - 1]);
+                yd = (yd + .5) / scale - .5;
+                if (yd < 0) yd = 0;
+                else if (yd > h) yd = h; yd = ceil(yd);
+                m = switch_buf == 0 ? shbuf2[shbuf_j - 1]:shbuf1[shbuf_j   - 1];
+                x[m] = (int) xd;
+                y[m] = (int) yd;
+                m++;
+            }
+        }
+      }
+      current_tid = j;
+      __syncthreads();
+    }
+
+    /*******************************************************
+    ***** compute rle encoding given y-boundary points *****
+    *******************************************************/
+
+    m = switch_buf == 0 ? shbuf2[current_k2 - 1] : shbuf1[current_k2 - 1];
+    int k3 = m;
+    for (int j = tid; j <= k3; j += block_jump){
+       if (j < k3) a[j] = (uint) (x[j] * (int) (h) + y[j]);
+       else a[j] = (uint)(h * w);
+    }
+    k3++;
+    __syncthreads();
+
+
+    /*
+
+    //run brick sort on a for k3+1 element
+    //load k3+1 elements of a into shared memory
+    for(long j = tid; j < k3; j += block_jump) shbuf1[j]=a[j];
+    __syncthreads();
+    uint a_temp;
+    for (int r = 0; r <= k3 / 2; r++){
+        int evenCas = k3 / 2;
+        int oddCas = (k3 - 1) / 2;
+        //start with 0, need (k3+1)/2 CAS
+        for (int j = tid; j < evenCas; j += block_jump){
+            if (shbuf1[2 * j] > shbuf1[2 * j + 1]){
+                a_temp = shbuf1[2 * j];
+                shbuf1[2 * j]=shbuf1[2 * j + 1];
+                shbuf1[2 * j + 1] = a_temp;
+            }
+        }
+        __syncthreads();
+        //start with 1
+        for (int j = tid; j < oddCas; j += block_jump){
+            if (shbuf1[2 * j + 1] > shbuf1[2 * j + 2]){
+                a_temp=shbuf1[2 * j + 1];
+                shbuf1[2 * j + 1] = shbuf1[2 * j + 2];
+                shbuf1[2 * j + 2]=a_temp;
+            }
+        }
+        __syncthreads();
+    }
+
+    for(long j = tid; j < k3; j += block_jump) {
+        if(j>0) shbuf2[j] = shbuf1[j - 1];
+        else shbuf2[j] = 0;
+    }
+     __syncthreads();
+    for(int j = tid; j < k3; j += block_jump) {
+        shbuf1[j] -= shbuf2[j];
+    }
+
+    uint *cnts_buf = cnts + cnts_offset;
+    if (tid == 0){
+        j = m = 0;
+        cnts_buf[m++] = shbuf1[j++];
+        while (j < k3) if (shbuf1[j] > 0) cnts_buf[m++] = shbuf1[j++]; else {
+            j++; if (j < k3) cnts_buf[m - 1] += shbuf1[j++]; }
+        num_of_cnts[poly_id] = m;
+    }
+    __syncthreads();
+    */
+
+    // TODO: implement shmem sort
+    uint a_temp;
+    for (int r = 0; r <= k3 / 2; r++){
+      int evenCas = k3 / 2;
+      int oddCas = (k3 - 1) / 2;
+      //start with 0, need (k3+1)/2 CAS
+      for (int j = tid; j < evenCas; j += block_jump){
+          if (a[2 * j] > a[2 * j + 1]){
+              a_temp = a[2 * j];
+              a[2 * j]=a[2 * j + 1];
+              a[2 * j + 1] = a_temp;
+          }
+      }
+      __syncthreads();
+      //start with 1
+      for (int j = tid; j < oddCas; j += block_jump){
+          if (a[2 * j + 1] > a[2* j + 2]){
+              a_temp=a[2 * j + 1];
+              a[2 * j + 1] = a[2 * j + 2];
+              a[2 * j + 2]=a_temp;
+          }
+      }
+      __syncthreads();
+    }
+
+    for(long j = tid; j < k3; j += block_jump) {
+      if(j>0) b[j] = a[j - 1];
+      else b[j] = 0;
+    }
+
+    __syncthreads();
+    for(int j = tid; j < k3; j += block_jump) {
+      a[j] -= b[j];
+    }
+
+    __syncthreads();
+    /**************************************
+    ********* writing to output ***********
+    **************************************/
+    uint *cnts_buf = cnts + cnts_offset;
+    if (tid == 0){
+        j = m = 0;
+        cnts_buf[m++] = a[j++];
+        while (j < k3) if (a[j] > 0) cnts_buf[m++] = a[j++]; else {
+            j++; if (j < k3) cnts_buf[m - 1] += a[j++]; }
+        num_of_cnts[poly_id] = m;
+    }
+    __syncthreads();
+}
+
 
 // Batch size upgrade: No need, per polygon
 /*cuda version of rleDecode function in this API:
@@ -503,88 +807,6 @@ __device__ T bilinear_interpolate(
   return val;
 }
 
-// Modified version of RoIAlignForwardKernel from Caffe (in roi_align.cu)
-// Main modifications:
-// - We don't need position_sensitive neither spatial_scale from the original RoIAlign kernel.
-// - We replace `channels` by `num_classes` and modify the logic consequently (e.g. offset_in_data
-//   does not use `c` anymore).
-template <typename T>
-__device__ void RoIAlignForward(
-    const T* in_data,  // (B, M, H, W)
-    const T* rois,  // (B, N, 4)
-    const T* matches,  // (B, N)
-    const int num_el,
-    const int num_classes,
-    const int height,
-    const int width,
-    const int pooled_height,
-    const int pooled_width,
-    const int sampling_ratio,
-    const int num_rois,
-    const int num_gtmasks,
-    T* out_data) {  // (B, N, C, H, W)
-  // Update kernel
-  for (size_t index = blockIdx.x * blockDim.x + threadIdx.x;
-       index < num_el;
-       index += blockDim.x * gridDim.x) {
-    // (n, c, ph, pw) is an element in the pooled output
-    int pw = index % pooled_width;
-    int ph = (index / pooled_width) % pooled_height;
-    // int c = (index / pooled_width / pooled_height) % num_classes;
-    int n = (index / pooled_width / pooled_height / num_classes) % num_rois;
-    int batch_idx = (index / pooled_width / pooled_height / num_classes / num_rois);
-
-    int roi_batch_ind = matches[batch_idx * num_rois + n];
-
-    const T* offset_rois = rois + batch_idx * (4 * num_rois) + n * 4;
-    // Do not using rounding; this implementation detail is critical
-    T roi_start_w = offset_rois[0];
-    T roi_start_h = offset_rois[1];
-    T roi_end_w = offset_rois[2];
-    T roi_end_h = offset_rois[3];
-
-    // Force malformed ROIs to be 1x1
-    T roi_width = max(roi_end_w - roi_start_w, (T)1.);
-    T roi_height = max(roi_end_h - roi_start_h, (T)1.);
-    T bin_size_h = static_cast<T>(roi_height) / static_cast<T>(pooled_height);
-    T bin_size_w = static_cast<T>(roi_width) / static_cast<T>(pooled_width);
-
-    const T* offset_in_data =
-        in_data + batch_idx * num_gtmasks * height * width
-        + roi_batch_ind * height * width;
-
-    // We use roi_bin_grid to sample the grid and mimic integral
-    int roi_bin_grid_h = (sampling_ratio > 0)
-        ? sampling_ratio
-        : ceil(roi_height / pooled_height);  // e.g., = 2
-    int roi_bin_grid_w =
-        (sampling_ratio > 0) ? sampling_ratio : ceil(roi_width / pooled_width);
-
-    // We do average (integral) pooling inside a bin
-    const T count = roi_bin_grid_h * roi_bin_grid_w;  // e.g. = 4
-
-    T output_val = 0.;
-    for (int iy = 0; iy < roi_bin_grid_h; iy++) {  // e.g., iy = 0, 1
-      const T y = roi_start_h + ph * bin_size_h +
-          static_cast<T>(iy + .5f) * bin_size_h /
-              static_cast<T>(roi_bin_grid_h);  // e.g., 0.5, 1.5
-      for (int ix = 0; ix < roi_bin_grid_w; ix++) {
-        const T x = roi_start_w + pw * bin_size_w +
-            static_cast<T>(ix + .5f) * bin_size_w /
-                static_cast<T>(roi_bin_grid_w);
-
-        T val = bilinear_interpolate(
-            offset_in_data, height, width, y, x, index);
-        output_val += val;
-      }
-    }
-    output_val /= count;
-
-    out_data[index] = output_val;
-  }
-}
-
-
 template<typename DType>
 __global__ void MRCNNMaskTargetKernel(const DType *rois,
                                       const DType *matches,
@@ -598,11 +820,6 @@ __global__ void MRCNNMaskTargetKernel(const DType *rois,
                                       int mask_size_h,
                                       int mask_size_w,
                                       int sample_ratio) {
-  // computing sampled_masks
-  // RoIAlignForward(gt_masks, rois, matches, total_out_el,
-  //                 num_classes, gt_height, gt_width, mask_size_h, mask_size_w,
-  //                 sample_ratio, num_rois, num_gtmasks, sampled_masks);
-  // new computing sampled_masks
 
   // computing mask_cls
   int num_masks = batch_size * num_rois * num_classes;
