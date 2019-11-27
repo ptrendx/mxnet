@@ -142,7 +142,7 @@ __global__ void old_rle_fr_poly_cuda_kernel(const double *dense_coordinates, int
     __syncthreads();
     //block-wide exclusive prefix scan
     int switch_buf = 0;
-    for (int offset = 1; offset <= k; offset *= 2){
+    for (int offset = 1; offset <= k; offset *= 2) {
         switch_buf = 1 - switch_buf;
         if (switch_buf == 0){
             for(int j = tid; j <= k; j += block_jump){
@@ -693,33 +693,6 @@ __global__ void decode_rle_cuda_kernel(const int *num_of_cnts, uint *cnts, long 
     }
 }
 
-
-// Batch size upgrade: Done
-// merging masks happens on mask format, not RLE format.
-template<typename DType>
-__global__ void merge_masks_cuda_kernel(unsigned char *masks_in, DType *masks_out, const int mask_size,
-                                        int *per_roi_poly_idx, const DType *cls_targets,
-                                        int num_classes) {
-
-    int roi_idx = blockIdx.x;
-    int tid = threadIdx.x;
-    int jump_block = blockDim.x;
-    int mask_start_idx = per_roi_poly_idx[roi_idx];
-    int num_of_masks_to_merge = per_roi_poly_idx[roi_idx + 1] - per_roi_poly_idx[roi_idx];
-
-    int class_idx = cls_targets[roi_idx];
-    int mask_offset = (roi_idx * num_classes + class_idx) * mask_size * mask_size;
-
-    for(int j = tid; j < mask_size * mask_size; j += jump_block){
-        int transposed_pixel = (j % mask_size) * mask_size + j / mask_size;
-        unsigned char pixel = 0;
-        for(int k = 0; k < num_of_masks_to_merge; k++){
-            if (masks_in[(mask_start_idx + k) * mask_size * mask_size + j] == 1) pixel = 1;
-            if (pixel == 1) break;
-        }
-        masks_out[mask_offset + transposed_pixel] = (DType)pixel;
-    }
-}
 
 // Batch size upgrade: Done
 // merging masks happens on mask format, not RLE format.
