@@ -35,7 +35,7 @@
 #include <array>
 #include "./vtune.h"
 #include "./aggregate_stats.h"
-#include "./nvtx.h"
+#include "../common/nvtx.h"
 #include "../common/utils.h"
 
 
@@ -778,7 +778,7 @@ struct ProfileTask : public ProfileDuration {
     categories_.set(domain_->name());
     categories_.append(",task");
     VTUNE_ONLY_CODE(vtune_task_.reset(new vtune::VTuneTask(name, domain->dom())));
-    NVTX_ONLY_CODE(nvtx_duration_.reset(new nvtx::NVTXDuration(name)));
+    NVTX_ONLY_CODE(nvtx_duration_.reset(new common::cuda::NVTXDuration(name)));
   }
 
   /*!
@@ -851,7 +851,7 @@ struct ProfileTask : public ProfileDuration {
   /*! \brief VTune task object */
   VTUNE_ONLY_CODE(std::unique_ptr<vtune::VTuneTask> vtune_task_);
   /*! \brief NVTX duration object */
-  NVTX_ONLY_CODE(std::unique_ptr<nvtx::NVTXDuration> nvtx_duration_);
+  NVTX_ONLY_CODE(std::unique_ptr<common::cuda::NVTXDuration> nvtx_duration_);
   /*! \brief whether to add this stat to AggregateStats */
   bool enable_aggregate_ = true;
 
@@ -872,7 +872,7 @@ struct ProfileEvent  : public ProfileDuration {
     : name_(name)
       , categories_("event") {
     VTUNE_ONLY_CODE(vtune_event_ = vtune::VTuneEvent::registry_.get(name));
-    NVTX_ONLY_CODE(nvtx_duration_.reset(new nvtx::NVTXDuration(name)));
+    NVTX_ONLY_CODE(nvtx_duration_.reset(new common::cuda::NVTXDuration(name)));
   }
 
   /*!
@@ -931,7 +931,7 @@ struct ProfileEvent  : public ProfileDuration {
   /*! \brief VTune event object */
   VTUNE_ONLY_CODE(vtune::VTuneEvent *vtune_event_);
   /*! \brief NVTX duration object */
-  NVTX_ONLY_CODE(std::unique_ptr<nvtx::NVTXDuration> nvtx_duration_;);
+  NVTX_ONLY_CODE(std::unique_ptr<common::cuda::NVTXDuration> nvtx_duration_;);
 
  protected:
   /*! \brief Start time of the event */
@@ -953,7 +953,7 @@ struct ProfileFrame : public ProfileDuration {
     CHECK_NOTNULL(domain);
     categories_.set(domain_->name());
     categories_.append(",frame");
-    NVTX_ONLY_CODE(nvtx_duration_.reset(new nvtx::NVTXDuration(name)));
+    NVTX_ONLY_CODE(nvtx_duration_.reset(new common::cuda::NVTXDuration(name)));
     VTUNE_ONLY_CODE(vtune_frame_.reset(new vtune::VTuneFrame(domain->dom())));
   }
 
@@ -1007,7 +1007,7 @@ struct ProfileFrame : public ProfileDuration {
   /*! \brief VTune Frame object */
   VTUNE_ONLY_CODE(std::unique_ptr<vtune::VTuneFrame> vtune_frame_);
   /*! \brief NVTX duration object */
-  NVTX_ONLY_CODE(std::unique_ptr<nvtx::NVTXDuration> nvtx_duration_);
+  NVTX_ONLY_CODE(std::unique_ptr<common::cuda::NVTXDuration> nvtx_duration_);
 
  protected:
   /*! \brief Frame start time */
