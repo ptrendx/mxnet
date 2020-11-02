@@ -40,6 +40,7 @@
 #---------------------------------------------
 set(USE_CUDA OFF CACHE BOOL "Build with CUDA support")
 set(USE_CUDNN OFF CACHE BOOL "Build with cudnn support, if found")
+set(USE_CUTENSOR OFF CACHE BOOL "Build with cutensor support, if found")
 
 # Target NVIDIA GPU achitecture.
 # Valid options are "Auto" for autodetection, "All" for all available
@@ -125,5 +126,4 @@ set(USE_INT64_TENSOR_SIZE OFF CACHE BOOL "Use int64_t to represent the total num
 # Other GPU features
 set(USE_NCCL "Use NVidia NCCL with CUDA" OFF)
 set(NCCL_ROOT "" CACHE BOOL "NCCL install path. Supports autodetection.")
-set(ENABLE_CUDA_RTC ON CACHE BOOL "Build with CUDA runtime compilation support")
 set(USE_NVTX ON CACHE BOOL "Build with NVTX support")
