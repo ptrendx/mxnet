@@ -282,10 +282,13 @@ fixed-size items.
 
     def __repr__(self):
         """Returns a string representation of the array."""
-        shape_info = 'x'.join(['%d' % x for x in self.shape])
-        return '\n%s\n<%s %s @%s>' % (str(self.asnumpy()),
-                                      self.__class__.__name__,
-                                      shape_info, self.ctx)
+        if self._alive:
+            shape_info = 'x'.join(['%d' % x for x in self.shape])
+            return '\n%s\n<%s %s @%s>' % (str(self.asnumpy()),
+                                          self.__class__.__name__,
+                                          shape_info, self.ctx)
+        else:
+            return '<FREED {}>'.format(self.__class__.__name__)
 
     def __reduce__(self):
         return NDArray, (None,), self.__getstate__()
@@ -454,6 +457,13 @@ fixed-size items.
                              "is ambiguous.")
 
     __nonzero__ = __bool__
+
+    def __str__(self):
+        """Returns a readable string representation of the array."""
+        if self.dtype == np.dtype([('bfloat16', np.uint16)]):
+            return super(NDArray, self.astype(float)).__str__()
+        else:
+            return super(NDArray, self).__str__()
 
     def __len__(self):
         """Number of element along the first axis."""

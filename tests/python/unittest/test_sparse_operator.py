@@ -695,6 +695,7 @@ def check_sparse_mathematical_core(name, stype,
 
 
 @pytest.mark.serial
+@pytest.mark.skip(reason='https://github.com/apache/incubator-mxnet/issues/18829')
 def test_sparse_mathematical_core():
     def util_sign(a):
         if np.isclose(a, -0, rtol=1.e-3, atol=1.e-3, equal_nan=True):
@@ -1645,6 +1646,7 @@ def test_sparse_square_sum():
 
 
 @pytest.mark.serial
+@pytest.mark.flaky
 def test_sparse_storage_fallback():
     """ test operators which don't implement FComputeEx or FStatefulComputeEx """
     def check_broadcast_add(shape, lhs_stype, rhs_stype):

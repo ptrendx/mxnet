@@ -263,11 +263,12 @@ build_centos7_cpu() {
     export CXXFLAGS="-fabi-version=11 -fabi-compat-version=7"
     cmake \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-        -DENABLE_TESTCOVERAGE=ON \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_MKLDNN=OFF \
         -DUSE_DIST_KVSTORE=ON \
         -DUSE_CUDA=OFF \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
+        -DUSE_INT64_TENSOR_SIZE=OFF \
         -G Ninja /work/mxnet
     ninja
 }
@@ -282,6 +283,7 @@ build_centos7_mkldnn() {
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_MKLDNN=ON \
         -DUSE_CUDA=OFF \
+        -DUSE_INT64_TENSOR_SIZE=OFF \
         -G Ninja /work/mxnet
     ninja
 }
@@ -298,7 +300,9 @@ build_centos7_gpu() {
         -DUSE_MKLDNN=ON \
         -DUSE_CUDA=ON \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
-        -DUSE_DIST_KVSTORE=ON\
+        -DUSE_DIST_KVSTORE=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
+        -DUSE_INT64_TENSOR_SIZE=OFF \
         -G Ninja /work/mxnet
     ninja
 }
@@ -314,12 +318,12 @@ build_ubuntu_cpu_openblas() {
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DENABLE_TESTCOVERAGE=ON \
         -DUSE_TVM_OP=ON \
-        -DUSE_CPP_PACKAGE=ON \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_MKLDNN=OFF \
         -DUSE_CUDA=OFF \
         -DUSE_DIST_KVSTORE=ON \
         -DBUILD_CYTHON_MODULES=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja /work/mxnet
     ninja
 }
@@ -334,7 +338,9 @@ build_ubuntu_cpu_mkl() {
         -DUSE_CUDA=OFF \
         -DUSE_TVM_OP=ON \
         -DUSE_MKL_IF_AVAILABLE=ON \
+        -DUSE_MKL_LAYERNORM=ON \
         -DUSE_BLAS=MKL \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -GNinja /work/mxnet
     ninja
 }
@@ -367,6 +373,7 @@ build_ubuntu_cpu_cmake_no_tvm_op() {
         -DUSE_OPENCV=ON \
         -DUSE_SIGNAL_HANDLER=ON \
         -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja \
         /work/mxnet
 
@@ -377,8 +384,6 @@ build_ubuntu_cpu_cmake_asan() {
     set -ex
 
     cd /work/build
-    export CXX=g++-8
-    export CC=gcc-8
     cmake \
         -DUSE_CUDA=OFF \
         -DUSE_MKL_IF_AVAILABLE=OFF \
@@ -389,8 +394,6 @@ build_ubuntu_cpu_cmake_asan() {
         -DUSE_GPERFTOOLS=OFF \
         -DUSE_JEMALLOC=OFF \
         -DUSE_ASAN=ON \
-        -DUSE_CPP_PACKAGE=ON \
-        -DMXNET_USE_CPU=ON \
         /work/mxnet
     make -j $(nproc) mxnet
 }
@@ -398,11 +401,9 @@ build_ubuntu_cpu_cmake_asan() {
 build_ubuntu_cpu_gcc8_werror() {
     set -ex
     cd /work/build
-    CXX=g++-8 CC=gcc-8 cmake \
+    CC=gcc-8 CXX=g++-8 cmake \
         -DUSE_CUDA=OFF \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-        -DUSE_CPP_PACKAGE=ON \
-        -DMXNET_USE_CPU=ON \
         -GNinja /work/mxnet
     ninja
 }
@@ -413,8 +414,6 @@ build_ubuntu_cpu_clang10_werror() {
     CXX=clang++-10 CC=clang-10 cmake \
        -DUSE_CUDA=OFF \
        -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-       -DUSE_CPP_PACKAGE=ON \
-       -DMXNET_USE_CPU=ON \
        -GNinja /work/mxnet
     ninja
 }
@@ -431,9 +430,9 @@ build_ubuntu_gpu_clang10_werror() {
 
     CXX=clang++-10 CC=clang-10 cmake \
        -DUSE_CUDA=ON \
+       -DUSE_NVML=OFF \
        -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
        -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
-       -DUSE_CPP_PACKAGE=OFF \
        -GNinja /work/mxnet
     ninja
 }
@@ -441,13 +440,13 @@ build_ubuntu_gpu_clang10_werror() {
 build_ubuntu_cpu_clang6() {
     set -ex
     cd /work/build
+    export OpenBLAS_HOME=/usr/local/openblas-clang/
     CXX=clang++-6.0 CC=clang-6.0 cmake \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_MKLDNN=OFF \
         -DUSE_CUDA=OFF \
         -DUSE_OPENMP=OFF \
         -DUSE_DIST_KVSTORE=ON \
-        -DUSE_CPP_PACKAGE=ON \
         -G Ninja /work/mxnet
     ninja
 }
@@ -455,13 +454,13 @@ build_ubuntu_cpu_clang6() {
 build_ubuntu_cpu_clang100() {
     set -ex
     cd /work/build
+    export OpenBLAS_HOME=/usr/local/openblas-clang/
     CXX=clang++-10 CC=clang-10 cmake \
        -DUSE_MKL_IF_AVAILABLE=OFF \
        -DUSE_MKLDNN=OFF \
        -DUSE_CUDA=OFF \
        -DUSE_OPENMP=ON \
        -DUSE_DIST_KVSTORE=ON \
-       -DUSE_CPP_PACKAGE=ON \
        -G Ninja /work/mxnet
     ninja
 }
@@ -469,6 +468,7 @@ build_ubuntu_cpu_clang100() {
 build_ubuntu_cpu_clang_tidy() {
     set -ex
     cd /work/build
+    export OpenBLAS_HOME=/usr/local/openblas-clang/
     # TODO(leezu) USE_OPENMP=OFF 3rdparty/dmlc-core/CMakeLists.txt:79 broken?
     CXX=clang++-10 CC=clang-10 cmake \
        -DUSE_MKL_IF_AVAILABLE=OFF \
@@ -477,7 +477,6 @@ build_ubuntu_cpu_clang_tidy() {
        -DUSE_OPENMP=OFF \
        -DCMAKE_BUILD_TYPE=Debug \
        -DUSE_DIST_KVSTORE=ON \
-       -DUSE_CPP_PACKAGE=ON \
        -DCMAKE_CXX_CLANG_TIDY=clang-tidy-10 \
        -G Ninja /work/mxnet
     ninja
@@ -486,11 +485,11 @@ build_ubuntu_cpu_clang_tidy() {
 build_ubuntu_cpu_clang6_mkldnn() {
     set -ex
     cd /work/build
+    export OpenBLAS_HOME=/usr/local/openblas-clang/
     CXX=clang++-6.0 CC=clang-6.0 cmake \
        -DUSE_MKL_IF_AVAILABLE=OFF \
        -DUSE_MKLDNN=ON \
        -DUSE_CUDA=OFF \
-       -DUSE_CPP_PACKAGE=ON \
        -DUSE_OPENMP=OFF \
        -G Ninja /work/mxnet
     ninja
@@ -499,11 +498,11 @@ build_ubuntu_cpu_clang6_mkldnn() {
 build_ubuntu_cpu_clang100_mkldnn() {
     set -ex
     cd /work/build
+    export OpenBLAS_HOME=/usr/local/openblas-clang/
     CXX=clang++-10 CC=clang-10 cmake \
        -DUSE_MKL_IF_AVAILABLE=OFF \
        -DUSE_MKLDNN=ON \
        -DUSE_CUDA=OFF \
-       -DUSE_CPP_PACKAGE=ON \
        -G Ninja /work/mxnet
     ninja
 }
@@ -518,7 +517,7 @@ build_ubuntu_cpu_mkldnn() {
         -DUSE_TVM_OP=ON \
         -DUSE_MKLDNN=ON \
         -DUSE_CUDA=OFF \
-        -DUSE_CPP_PACKAGE=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja /work/mxnet
     ninja
 }
@@ -534,12 +533,9 @@ build_ubuntu_cpu_mkldnn_mkl() {
         -DUSE_TVM_OP=ON \
         -DUSE_MKL_IF_AVAILABLE=ON \
         -DUSE_BLAS=MKL \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -GNinja /work/mxnet
     ninja
-}
-
-build_ubuntu_gpu() {
-    build_ubuntu_gpu_cuda101_cudnn7
 }
 
 build_ubuntu_gpu_tensorrt() {
@@ -588,6 +584,7 @@ build_ubuntu_gpu_tensorrt() {
           -DUSE_TENSORRT=1                        \
           -DUSE_OPENMP=0                          \
           -DUSE_MKLDNN=0                          \
+          -DUSE_NVML=OFF                          \
           -DUSE_MKL_IF_AVAILABLE=OFF              \
           -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
           -G Ninja                                \
@@ -603,8 +600,9 @@ build_ubuntu_gpu_mkldnn() {
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_CUDA=ON \
+        -DUSE_NVML=OFF \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
-        -DUSE_CPP_PACKAGE=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja /work/mxnet
     ninja
 }
@@ -616,64 +614,46 @@ build_ubuntu_gpu_mkldnn_nocudnn() {
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_CUDA=ON \
+        -DUSE_NVML=OFF \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
         -DUSE_CUDNN=OFF \
-        -DUSE_CPP_PACKAGE=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja /work/mxnet
     ninja
 }
 
-build_ubuntu_gpu_cuda101_cudnn7() {
+build_ubuntu_gpu() {
     set -ex
     cd /work/build
     CC=gcc-7 CXX=g++-7 cmake \
         -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_CUDA=ON \
+        -DUSE_NVML=OFF \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
         -DUSE_CUDNN=ON \
         -DUSE_MKLDNN=OFF \
-        -DUSE_CPP_PACKAGE=ON \
         -DUSE_DIST_KVSTORE=ON \
         -DBUILD_CYTHON_MODULES=ON \
+        -DBUILD_EXTENSION_PATH=/work/mxnet/example/extensions/lib_external_ops \
         -G Ninja /work/mxnet
     ninja
 }
 
-build_ubuntu_gpu_cuda101_cudnn7_debug() {
+build_ubuntu_gpu_debug() {
     set -ex
     cd /work/build
     CC=gcc-7 CXX=g++-7 cmake \
         -DCMAKE_BUILD_TYPE=Debug \
         -DUSE_MKL_IF_AVAILABLE=OFF \
         -DUSE_CUDA=ON \
+        -DUSE_NVML=OFF \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
         -DUSE_CUDNN=ON \
         -DUSE_MKLDNN=OFF \
-        -DUSE_CPP_PACKAGE=ON \
         -DUSE_DIST_KVSTORE=ON \
         -DBUILD_CYTHON_MODULES=ON \
         -G Ninja /work/mxnet
-    ninja
-}
-
-build_ubuntu_gpu_cmake() {
-    set -ex
-    cd /work/build
-    CC=gcc-7 CXX=g++-7 cmake \
-        -DUSE_SIGNAL_HANDLER=ON                 \
-        -DUSE_CUDA=ON                           \
-        -DUSE_CUDNN=ON                          \
-        -DUSE_MKL_IF_AVAILABLE=OFF              \
-        -DUSE_MKLML_MKL=OFF                     \
-        -DUSE_MKLDNN=OFF                        \
-        -DUSE_DIST_KVSTORE=ON                   \
-        -DCMAKE_BUILD_TYPE=Release              \
-        -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
-        -DBUILD_CYTHON_MODULES=1                \
-        -G Ninja                                \
-        /work/mxnet
-
     ninja
 }
 
@@ -684,8 +664,7 @@ build_ubuntu_cpu_large_tensor() {
         -DUSE_SIGNAL_HANDLER=ON                 \
         -DUSE_CUDA=OFF                          \
         -DUSE_CUDNN=OFF                         \
-        -DUSE_MKLDNN=OFF                        \
-        -DUSE_INT64_TENSOR_SIZE=ON              \
+        -DUSE_MKLDNN=ON                         \
         -G Ninja                                \
         /work/mxnet
 
@@ -699,13 +678,12 @@ build_ubuntu_gpu_large_tensor() {
         -DUSE_SIGNAL_HANDLER=ON                 \
         -DUSE_CUDA=ON                           \
         -DUSE_CUDNN=ON                          \
+        -DUSE_NVML=OFF \
         -DUSE_MKL_IF_AVAILABLE=OFF              \
-        -DUSE_MKLML_MKL=OFF                     \
-        -DUSE_MKLDNN=OFF                        \
+        -DUSE_MKLDNN=ON                         \
         -DUSE_DIST_KVSTORE=ON                   \
         -DCMAKE_BUILD_TYPE=Release              \
         -DMXNET_CUDA_ARCH="$CI_CMAKE_CUDA_ARCH" \
-        -DUSE_INT64_TENSOR_SIZE=ON              \
         -G Ninja                                \
         /work/mxnet
 
@@ -737,6 +715,7 @@ sanity_cpp() {
 
 sanity_python() {
     set -ex
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     python3 -m pylint --rcfile=ci/other/pylintrc --ignore-patterns=".*\.so$$,.*\.dll$$,.*\.dylib$$" python/mxnet
     OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -n 4 tests/tutorials/test_sanity_tutorials.py
 }
@@ -753,7 +732,7 @@ cd_unittest_ubuntu() {
     export MXNET_SUBGRAPH_VERBOSE=0
     export MXNET_ENABLE_CYTHON=0
     export CD_JOB=1 # signal this is a CD run so any unecessary tests can be skipped
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
 
     local mxnet_variant=${1:?"This function requires a mxnet variant as the first argument"}
 
@@ -770,8 +749,9 @@ cd_unittest_ubuntu() {
         MXNET_ENGINE_TYPE=NaiveEngine \
             OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --verbose tests/python/gpu
         MXNET_GPU_MEM_POOL_TYPE=Unpooled \
-            OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --verbose tests/python/gpu
+            OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator and not test_amp_init.py' -n 4 --durations=50 --verbose tests/python/gpu
         pytest -m 'serial' --durations=50 --verbose tests/python/gpu
+        pytest --durations=50 --verbose tests/python/gpu/test_amp_init.py
 
         # TODO(szha): fix and reenable the hanging issue. tracked in #18098
         # integrationtest_ubuntu_gpu_dist_kvstore
@@ -791,7 +771,7 @@ unittest_ubuntu_python3_cpu() {
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
     export MXNET_ENABLE_CYTHON=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --verbose tests/python/unittest
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --cov-append --verbose tests/python/unittest
@@ -805,7 +785,7 @@ unittest_ubuntu_python3_cpu_mkldnn() {
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
     export MXNET_ENABLE_CYTHON=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --verbose tests/python/unittest
     MXNET_ENGINE_TYPE=NaiveEngine \
                      OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --cov-append --verbose tests/python/unittest
@@ -821,13 +801,14 @@ unittest_ubuntu_python3_gpu() {
     export MXNET_SUBGRAPH_VERBOSE=0
     export CUDNN_VERSION=${CUDNN_VERSION:-7.0.3}
     export MXNET_ENABLE_CYTHON=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
-        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
+        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator and not test_amp_init.py' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
     pytest -m 'serial' --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
+    pytest --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu/test_amp_init.py
 }
 
 unittest_ubuntu_python3_gpu_cython() {
@@ -839,14 +820,15 @@ unittest_ubuntu_python3_gpu_cython() {
     export CUDNN_VERSION=${CUDNN_VERSION:-7.0.3}
     export MXNET_ENABLE_CYTHON=1
     export MXNET_ENFORCE_CYTHON=1
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     check_cython
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
-        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
+        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator and not test_amp_init.py' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
     pytest -m 'serial' --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
+    pytest --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu/test_amp_init.py
 }
 
 unittest_ubuntu_python3_gpu_nocudnn() {
@@ -856,17 +838,19 @@ unittest_ubuntu_python3_gpu_nocudnn() {
     export MXNET_SUBGRAPH_VERBOSE=0
     export CUDNN_OFF_TEST_ONLY=true
     export MXNET_ENABLE_CYTHON=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
-        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
+        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator and not test_amp_init.py' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --verbose tests/python/gpu
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
     pytest -m 'serial' --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
+    pytest --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu/test_amp_init.py
 }
 
 unittest_cpp() {
     set -ex
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     build/tests/mxnet_unit_tests
 }
 
@@ -874,6 +858,7 @@ unittest_centos7_cpu() {
     set -ex
     source /opt/rh/rh-python36/enable
     cd /work/mxnet
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     OMP_NUM_THREADS=$(expr $(nproc) / 4) python -m pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --verbose tests/python/unittest
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) python -m pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_unittest.xml --cov-append --verbose tests/python/unittest
@@ -886,23 +871,26 @@ unittest_centos7_gpu() {
     source /opt/rh/rh-python36/enable
     cd /work/mxnet
     export CUDNN_VERSION=${CUDNN_VERSION:-7.0.3}
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
-        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
+        OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'not test_operator and not test_amp_init.py' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
     MXNET_GPU_MEM_POOL_TYPE=Unpooled \
     MXNET_ENGINE_TYPE=NaiveEngine \
         OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -m 'not serial' -k 'test_operator' -n 4 --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
     pytest -m 'serial' --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu
+    pytest --durations=50 --cov-report xml:tests_gpu.xml --cov-append --verbose tests/python/gpu/test_amp_init.py
 }
 
 integrationtest_ubuntu_cpu_onnx() {
 	set -ex
 	export PYTHONPATH=./python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+	export MXNET_SUBGRAPH_VERBOSE=0
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
 	python3 tests/python/unittest/onnx/backend_test.py
 	OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -n 4 tests/python/unittest/onnx/mxnet_export_test.py
 	OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -n 4 tests/python/unittest/onnx/test_models.py
 	OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -n 4 tests/python/unittest/onnx/test_node.py
+	OMP_NUM_THREADS=$(expr $(nproc) / 4) pytest -n 4 tests/python/unittest/onnx/test_onnxruntime.py
 }
 
 integrationtest_ubuntu_cpu_dist_kvstore() {
@@ -912,7 +900,7 @@ integrationtest_ubuntu_cpu_dist_kvstore() {
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
     export MXNET_USE_OPERATOR_TUNING=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     cd tests/nightly/
     python3 ../../tools/launch.py -n 7 --launcher local python3 dist_sync_kvstore.py --type=gluon_step_cpu
     python3 ../../tools/launch.py -n 7 --launcher local python3 dist_sync_kvstore.py --type=gluon_sparse_step_cpu
@@ -928,6 +916,7 @@ integrationtest_ubuntu_cpu_dist_kvstore() {
 
 integrationtest_ubuntu_gpu_dist_kvstore() {
     set -ex
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     pushd .
     cd /work/mxnet/python
     pip3 install -e .
@@ -947,7 +936,7 @@ integrationtest_ubuntu_gpu_byteps() {
     git clone -b v0.2.3 https://github.com/bytedance/byteps ~/byteps
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     cd tests/nightly/
 
     export NVIDIA_VISIBLE_DEVICES=0
@@ -970,7 +959,7 @@ test_ubuntu_cpu_python3() {
     set -ex
     pushd .
     export MXNET_LIBRARY_PATH=/work/build/libmxnet.so
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     VENV=mxnet_py3_venv
     virtualenv -p `which python3` $VENV
     source $VENV/bin/activate
@@ -994,7 +983,7 @@ unittest_ubuntu_python3_arm() {
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
     export MXNET_ENABLE_CYTHON=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     python3 -m pytest -n 2 --verbose tests/python/unittest/test_engine.py
 }
 
@@ -1003,6 +992,7 @@ unittest_ubuntu_python3_arm() {
 #Runs Apache RAT Check on MXNet Source for License Headers
 test_rat_check() {
     set -e
+    set -o pipefail
     pushd .
 
     cd /usr/local/src/apache-rat-0.13
@@ -1028,7 +1018,7 @@ test_rat_check() {
 nightly_test_KVStore_singleNode() {
     set -ex
     export PYTHONPATH=./python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     tests/nightly/test_kvstore.py
 }
 
@@ -1036,27 +1026,15 @@ nightly_test_KVStore_singleNode() {
 nightly_test_large_tensor() {
     set -ex
     export PYTHONPATH=./python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
-    pytest tests/nightly/test_large_array.py::test_tensor
-    pytest tests/nightly/test_large_array.py::test_nn
-    pytest tests/nightly/test_large_array.py::test_basic
-}
-
-#Test Large Vectors
-nightly_test_large_vector() {
-    set -ex
-    export PYTHONPATH=./python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
-    pytest tests/nightly/test_large_vector.py::test_tensor
-    pytest tests/nightly/test_large_vector.py::test_nn
-    pytest tests/nightly/test_large_vector.py::test_basic
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
+    pytest --timeout=0 --forked tests/nightly/test_np_large_array.py
 }
 
 #Tests Model backwards compatibility on MXNet
 nightly_model_backwards_compat_test() {
     set -ex
     export PYTHONPATH=/work/mxnet/python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     ./tests/nightly/model_backwards_compatibility_check/model_backward_compat_checker.sh
 }
 
@@ -1064,7 +1042,7 @@ nightly_model_backwards_compat_test() {
 nightly_model_backwards_compat_train() {
     set -ex
     export PYTHONPATH=./python/
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     ./tests/nightly/model_backwards_compatibility_check/train_mxnet_legacy_models.sh
 }
 
@@ -1073,7 +1051,7 @@ nightly_tutorial_test_ubuntu_python3_gpu() {
     cd /work/mxnet/docs
     export BUILD_VER=tutorial
     export MXNET_DOCS_BUILD_MXNET=0
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     make html
     export MXNET_STORAGE_FALLBACK_LOG_VERBOSE=0
     export MXNET_SUBGRAPH_VERBOSE=0
@@ -1085,7 +1063,7 @@ nightly_tutorial_test_ubuntu_python3_gpu() {
 
 nightly_estimator() {
     set -ex
-    export DMLC_LOG_STACK_TRACE_DEPTH=10
+    export DMLC_LOG_STACK_TRACE_DEPTH=100
     cd /work/mxnet/tests/nightly/estimator
     export PYTHONPATH=/work/mxnet/python/
     pytest test_estimator_cnn.py
@@ -1290,10 +1268,10 @@ build_static_libmxnet() {
 # Tests CD PyPI packaging in CI
 ci_package_pypi() {
     set -ex
-    # copies mkldnn header files to 3rdparty/mkldnn/include/ as in CD
-    mkdir -p 3rdparty/mkldnn/include
-    cp include/mkldnn/dnnl_version.h 3rdparty/mkldnn/include/.
-    cp include/mkldnn/dnnl_config.h 3rdparty/mkldnn/include/.
+    # copies mkldnn header files to 3rdparty/mkldnn/include/oneapi/dnnl/ as in CD
+    mkdir -p 3rdparty/mkldnn/include/oneapi/dnnl
+    cp include/mkldnn/oneapi/dnnl/dnnl_version.h 3rdparty/mkldnn/include/oneapi/dnnl/.
+    cp include/mkldnn/oneapi/dnnl/dnnl_config.h 3rdparty/mkldnn/include/oneapi/dnnl/.
     local mxnet_variant=${1:?"This function requires a python command as the first argument"}
     cd_package_pypi ${mxnet_variant}
     cd_integration_test_pypi

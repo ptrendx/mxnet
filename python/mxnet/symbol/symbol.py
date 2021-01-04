@@ -46,7 +46,7 @@ from ..util import is_np_shape
 from ..profiler import scope as _profiler_scope
 from ..profiler import _current_scope as _current_profiler_scope
 
-__all__ = ["Symbol", "var", "Variable", "Group", "load", "load_json",
+__all__ = ["Symbol", "var", "Variable", "Group", "load", "fromjson",
            "pow", "power", "maximum", "minimum", "hypot", "eye", "zeros",
            "ones", "full", "arange", "linspace", "histogram", "split_v2"]
 
@@ -73,12 +73,15 @@ class Symbol(SymbolBase):
 
     def __repr__(self):
         """Gets a string representation of the symbol."""
-        name = self.name
-        if name is None:
-            name = ', '.join([i.name for i in self])
-            return '<%s group [%s]>' % (self.__class__.__name__, name)
+        if self._alive:
+            name = self.name
+            if name is None:
+                name = ', '.join([i.name for i in self])
+                return '<%s group [%s]>' % (self.__class__.__name__, name)
+            else:
+                return '<%s %s>' % (self.__class__.__name__, name)
         else:
-            return '<%s %s>' % (self.__class__.__name__, name)
+            return '<FREED {}>'.format(self.__class__.__name__)
 
     def __iter__(self):
         """Returns a generator object of symbol.
@@ -1397,7 +1400,7 @@ class Symbol(SymbolBase):
 
         See Also
         --------
-        symbol.load_json : Used to load symbol from JSON string.
+        symbol.fromjson : Used to load symbol from JSON string.
         """
         json_str = ctypes.c_char_p()
         if remove_amp_cast:
@@ -2650,6 +2653,15 @@ class Symbol(SymbolBase):
     def backward(self):
         raise NotImplementedForSymbol(self.backward, None)
 
+
+    def has_dynamic_shape_op(self):
+        """Check if any dynamic shape op is present in the symbol.
+        """
+        has_dynamic_shape = ctypes.c_bool(False)
+        check_call(_LIB.MXCheckDynamicShapeOp(self.handle,
+                                              ctypes.byref(has_dynamic_shape)))
+        return has_dynamic_shape.value
+
 def var(name, attr=None, shape=None, lr_mult=None, wd_mult=None, dtype=None,
         init=None, stype=None, profiler_scope=None, **kwargs):
     """Creates a symbolic variable with specified name.
@@ -2809,7 +2821,7 @@ def load(fname):
     return Symbol(handle)
 
 
-def load_json(json_str):
+def fromjson(json_str):
     """Loads symbol from json string.
 
     Parameters
